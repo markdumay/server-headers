@@ -152,3 +152,35 @@
 
 [links]
     hinode = "https://gethinode.com"
+
+[modules]
+[modules.mod-one.csp]
+    script-src = [
+        "'self'",
+        "data:",
+        "one.com"
+    ]
+
+[modules.mod-two.csp]
+    script-src = [
+        "//two.com",
+        "https:"
+    ]
+    style-src = [
+        "'self'",
+        "'sha256-456'"
+    ]
+
+[modules.mod-three.csp]
+    script-src = [
+        "https://three.com"
+    ]
+    style-src = [
+        "unsafe-inline",
+        "https://style.com",
+        "'self'",
+        "'sha256-123'"
+    ]
+    sandbox = [
+        "allow-same-origin"
+    ]

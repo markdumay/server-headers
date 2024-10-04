@@ -1,0 +1,203 @@
+{{/* Define supported directives */}}
+{{- $directives := slice 
+    "base-uri"
+    "child-src"
+    "connect-src"
+    "default-src"
+    "font-src"
+    "form-action"
+    "frame-ancestors"
+    "frame-src"
+    "img-src"
+    "manifest-src"
+    "media-src"
+    "navigate-to"
+    "object-src"
+    "plugin-types"
+    "prefetch-src"
+    "report-to"
+    "report-uri"
+    "sandbox"
+    "script-src"
+    "style-src"
+    "worker-src"
+-}}
+
+{{/* Define preferred order of '-src' value */}}
+{{- $weights := dict 
+    "*"                "01"
+    "'none'"           "02"
+    "'self'"           "03"
+    "data:"            "04"
+    "'unsafe-inline'"  "05"
+    "'strict-dynamic'" "06"
+    "'unsafe-eval'"    "07"
+    "'unsafe-hashes'"  "08"
+    "https:"           "09"
+-}}
+
+{{- define "partials/assets/validate-src-directive.html" -}}
+    {{- $results := .settings -}}
+    {{- $key := .key -}}
+    {{- $mod := .mod -}}
+    {{- $vals := .vals -}}
+
+    {{/* Define supported values for '-src' directives (excluding sha26, nonce and domains) */}}
+    {{- $srclist := slice
+        "*"
+        "'none'"
+        "'self'"
+        "data:"
+        "https:"
+        "'unsafe-inline'"
+        "'unsafe-eval'"
+        "'strict-dynamic'"
+        "'unsafe-hashes'"
+    -}}
+
+    {{- $validations := slice
+        "'*'"
+        "none"
+        "self"
+        "unsafe-inline"
+        "unsafe-eval"
+        "strict-dynamic"
+        "unsafe-hashes"
+    -}}
+
+    {{- range $val := $vals -}}
+        {{/* Test if the value is a keyword */}}
+        {{- $valid := in $srclist $val -}}
+
+        {{/* Warn for potentially incorrect use of single quotes */}}
+        {{- if in $validations $val -}}
+            {{- warnf "Possibly incorrect use of quotes for directive '%s' in module '%s': %s" $key $mod $val -}}
+        {{- end -}}
+
+        {{/* Test if the value is a supported hash value */}}
+        {{- if not $valid -}}
+            {{- $valid = eq (index (findRE `'sha256-[!-~]+'` $val) 0) $val -}}
+        {{- end -}}
+
+        {{/* Test if the value is a supported nonce value */}}
+        {{- if not $valid -}}
+            {{- $valid = eq (index (findRE `'nonce-[!-~]+'` $val) 0) $val -}}
+        {{- end -}}
+
+        {{/* Test if the value is a recognized relative or absolute domain */}}
+        {{- if not $valid -}}
+            {{- $url := "" -}}
+            {{- $error := false -}}
+            {{- $split := split $val "//" -}}
+            {{- if eq (len $split) 1 -}}
+                {{- if ne $val (urlize $val) -}}
+                    {{- $error = true -}}
+                {{- else -}}
+                    {{- $url = urls.Parse (printf "//%s" $val) -}}
+                {{- end -}}
+            {{- else if eq (len $split) 2 -}}
+                {{- if ne (index $split 1) (urlize (index $split 1)) -}}
+                    {{- $error = true -}}
+                {{- else -}}
+                    {{- $url = urls.Parse $val -}}
+                {{- end -}}
+            {{- else -}}
+                {{- $error = true -}}
+            {{- end -}}
+
+            {{- if not $error -}}
+                {{- $valid = and $url.Hostname (eq $url.RequestURI "/") -}}
+            {{- end -}}
+        {{- end -}}
+
+        {{- if not $valid -}}
+            {{- warnf "Unsupported source value '%s' for directive '%s' in module '%s'" $val $key $mod -}}
+        {{- else -}}
+            {{- $current := index $results $key | default slice -}}
+            {{- $target := union $current (slice $val) -}}
+            {{- $results = merge $results (dict $key $target) -}}
+        {{- end -}}
+    {{- end -}}
+
+    {{- return $results -}}
+{{- end -}}
+
+{{- define "partials/assets/validate-sandbox-directive.html" -}}
+{{- end -}}
+
+
+{{/* Define supported flags for 'sandbox' directive */}}
+{{- $sandboxflags := slice 
+    "allow-scripts"
+    "allow-forms"
+    "allow-modals"
+    "allow-orientation-lock"
+    "allow-pointer-lock"
+    "allow-popups"
+    "allow-popups-to-escape-sandbox"
+    "allow-presentation"
+    "allow-top-navigation"
+    "allow-downloads"
+    "allow-same-origin"
+-}}
+
+{{- $settings := dict -}}
+{{- $headers := dict -}}
+
+{{/* Iterate over the directives and their values, flagging incorrect settings */}}
+{{- range $mod, $cfg := site.Params.modules -}}
+    {{- $csp := index $cfg "csp" -}}
+    {{- range $key, $vals := $csp -}}
+        {{- if not (in $directives $key) -}}
+            {{- warnf "Unrecognized CSP directive '%s' in module '%s'" $key $mod -}}
+        {{- end -}}
+
+        {{- if hasSuffix $key "-src" -}}
+            {{- $results := partial "assets/validate-src-directive.html" (dict "key" $key "mod" $mod "settings" $settings "vals" $vals) -}}
+            {{- $settings = merge $settings $results -}}
+        {{- else if eq $key "sandbox" -}}
+            {{- range $val := $vals -}}
+                {{- if not (in $sandboxflags .) -}}
+                    {{- warnf "Unsupported flag '%s' for directive '%s' in module '%s'" $val $key $mod -}}
+                {{- end -}}
+            {{- end -}}
+        {{- end -}}
+
+        {{- if not (hasSuffix $key "-src") -}}
+            {{- $settings = merge $settings (dict $key $vals) -}}
+        {{- end -}}
+    {{- end -}}
+{{- end -}}
+
+{{/* Sort the directive's values by weight */}}
+{{- range $key, $values := $settings -}}
+    {{- if hasSuffix $key "-src" -}}
+        {{- $weight := index $weights -}}
+        {{- $data := dict -}}
+        {{- $sorted := slice -}}
+
+        {{- range $values -}}
+            {{- $weight := index $weights . | default (printf "99 %s" . | lower) -}}
+            {{- $data = merge $data (dict $weight .) -}}
+        {{- end -}}
+
+        {{- range $k, $v := $data -}}
+            {{- $sorted = $sorted | append $v -}}
+        {{- end -}}
+
+        {{- $headers = merge $headers (dict $key (delimit $sorted " ")) -}}
+    {{- else -}}
+        {{- $headers = merge $headers (dict $key (delimit $values " ")) -}}
+    {{- end -}}
+{{- end -}}
+
+{{- range $key, $values := $headers -}}
+    {{- $items := (slice | append $values) -}}
+    {{- $max := sub (len $items) 1 -}}
+    {{- range $index, $val := $items -}}
+        {{- $prefix := (cond (eq $index 0) $key "") -}}
+        {{- $suffix := cond (eq $index $max) "; " " " -}}
+        {{- $row := printf "%s %s%s\\" $prefix $val $suffix -}}
+        {{ printf "%s\n" $row }}
+    {{- end -}}
+{{- end -}}
